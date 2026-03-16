@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <title>SF Pro HUD Navigation</title>
+
+    <!-- Leaflet 지도 라이브러리 -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <style>
+        :root {
+            /* [폰트 수정] SF Pro 폰트 스택 최우선 적용 */
+            --sf-font: "SF Pro Display", "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            --tick-spacing: 65px;
+            --neon-blue: #FA734D;
+        }
+
+        body {
+            margin: 0;
+            background: #000;
+            color: #fff;
+            font-family: var(--sf-font);
+            height: 100vh;
+            overflow: hidden;
+            /* SF Pro의 가독성을 극대화하는 렌더링 옵션 */
+            -webkit-font-smoothing: antialiased;
+            font-variant-numeric: tabular-nums;
+            letter-spacing: -0.02em;
+        }
+
+        /* --- [지도 시인성 강화] --- */
+        #map-perspective {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            perspective: 1200px;
+            z-index: 1;
+        }
+
+        #map-tilt {
+            position: absolute;
+            width: 100%; height: 100%;
+            transform: rotateX(35deg);
+            transform-origin: bottom center;
+        }
+
+        #map {
+            position: absolute;
+            top: -70%; left: -100%;
+            width: 300%; height: 300%;
+            transform-origin: center center;
+            /* 지도 선명도 극대화 */
+            filter: invert(100%) hue-rotate(180deg) brightness(1.2) contrast(1.6);
+            transition: transform 0.1s linear;
+        }
+
+        .leaflet-control-container { display: none !important; }
+
+        /* 하단 그라데이션 오버레이 */
+        #map-overlay {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            z-index: 5;
+            background: linear-gradient(to bottom,
+                transparent 50%,
+                rgba(0,0,0,0.6) 80%,
+                #000 100%);
+            pointer-events: none;
+        }
+
+        /* --- 1. 좌측 속도계 (SF Pro Bold 적용) --- */
+        #speedometer-wrapper {
+            position: absolute;
+            left: 15px; top: 15%; bottom: 25%;
+            min-height: 250px; max-height: 380px; width: 75px;
+            background: rgba(0, 0, 0, 0.65);
+            backdrop-filter: blur(12px); /* 블러 강도 상향 */
+            border: 1px solid rgba(255, 255, 255, 0.4);
+            border-radius: 1px;
+            z-index: 10;
+        }
+
+        #speed-tape-window {
+            position: absolute;
+            top: 0; left: 0; width: 100%; bottom: 28px;
+            overflow: hidden;
+        }
+
+        #red-limit-line {
+            position: absolute;
+            right: 0; top: 0; width: 5px; height: 100%;
+            background: #ff0000; z-index: 5;
+            box-shadow: -2px 0 8px rgba(255,0,0,0.5);
+        }
+
+        #speed-tape {
+            position: absolute;
+            width: 100%; bottom: 50%;
+            display: flex; flex-direction: column-reverse;
+            transition: transform 0.1s linear;
+        }
+
+        .speed-tick {
+            height: var(--tick-spacing); position: relative;
+            display: flex; align-items: center; justify-content: flex-start;
+            padding-left: 10px;
+            font-size: 24px;
+            font-weight: 700; /* SF Pro Bold */
+        }
+
+        .speed-tick::after {
+            content: ""; position: absolute; right: 5px; bottom: 0;
+            width: 16px; height: 2px; background: #fff;
+        }
+
+        .speed-tick-minor {
+            position: absolute; right: 5px; top: 50%;
+            width: 8px; height: 2px; background: rgba(255, 255, 255, 0.7);
+        }
+
+        #pointer-container {
+            position: absolute; left: -8px; top: 50%;
+            margin-top: -25px; width: 95px; height: 50px; z-index: 20;
+        }
+
+        #pointer-text {
+            position: absolute; top: 50%; left: 38px;
+            transform: translate(-50%, -50%);
+            font-size: 30px; font-weight: 800; color: #fff; z-index: 25;
+            letter-spacing: -0.05em; /* 숫자 간격 조절 */
+        }
+
+        #spd-info-box {
+            position: absolute; bottom: 0; left: 0; width: 100%; height: 28px;
+            background: #000; border-top: 1px solid rgba(255, 255, 255, 0.5);
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 0 6px; box-sizing: border-box;
+            font-size: 11px; font-weight: 900;
+        }
+
+        /* --- 2. 하단 나침반 (SF Pro Heavy 적용) --- */
+        #compass-wrapper {
+            position: absolute; bottom: 30px; left: 0; width: 100%;
+            padding: 0 25px; box-sizing: border-box; z-index: 10;
+        }
+
+        #heading-text-group {
+            margin-bottom: 8px; display: flex; align-items: baseline; gap: 10px;
+            text-shadow: 0 0 15px rgba(0,0,0,0.9);
+        }
+
+        #heading-deg { font-size: 52px; font-weight: 800; color: #fff; letter-spacing: -0.03em; }
+        #heading-dir { font-size: 24px; color: var(--neon-blue); font-weight: 700; text-transform: uppercase; }
+
+        #compass-tape-window {
+            position: relative;
+            width: 100%; height: 60px; overflow: hidden;
+            background: rgba(0,0,0,0.6);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 12px;
+            mask-image: linear-gradient(to right, transparent, black 15%, black 85%, transparent);
+            -webkit-mask-image: linear-gradient(to right, transparent, black 15%, black 85%, transparent);
+        }
+
+        #compass-center-mark {
+            position: absolute; left: 50%; margin-left: -1.5px; top: 0;
+            width: 3px; height: 28px; background: var(--neon-blue); z-index: 20;
+            box-shadow: 0 0 12px var(--neon-blue);
+        }
+
+        #compass-tape {
+            position: absolute; top: 0; left: 50%; display: flex;
+            transition: transform 0.1s linear;
+        }
+
+        .compass-unit { flex: 0 0 120px; width: 120px; height: 100%; position: relative; }
+
+        .compass-tick-major {
+            position: absolute; top: 10px; left: 0; width: 2px; height: 16px;
+            background: #fff; transform: translateX(-50%);
+        }
+
+        .compass-tick-minor {
+            position: absolute; top: 10px; width: 2px; height: 9px;
+            background: rgba(255, 255, 255, 0.6); transform: translateX(-50%);
+        }
+
+        .compass-label {
+            position: absolute; top: 32px; left: 0; transform: translateX(-50%);
+            font-size: 18px; font-weight: 800; color: #fff;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="map-perspective">
+        <div id="map-tilt">
+            <div id="map"></div>
+        </div>
+    </div>
+    <div id="map-overlay"></div>
+
+    <!-- 속도계 -->
+    <div id="speedometer-wrapper">
+        <div id="speed-tape-window">
+            <div id="red-limit-line"></div>
+            <div id="speed-tape"></div>
+            <div id="pointer-container">
+                <svg width="95" height="50" viewBox="0 0 95 50">
+                    <path d="M 2 5 L 68 5 L 90 25 L 68 45 L 2 45 Z" fill="#000" stroke="#fff" stroke-width="2.5"/>
+                </svg>
+                <div id="pointer-text">---</div>
+            </div>
+        </div>
+        <div id="spd-info-box">
+            <span>GS</span>
+            <span id="speed-val-label">0 KM/H</span>
+        </div>
+    </div>
+
+    <!-- 나침반 -->
+    <div id="compass-wrapper">
+        <div id="heading-text-group">
+            <span id="heading-deg">0°</span>
+            <span id="heading-dir">NORTH</span>
+        </div>
+        <div id="compass-tape-window">
+            <div id="compass-center-mark"></div>
+            <div id="compass-tape"></div>
+        </div>
+    </div>
+
+    <script>
+        // --- 1. 지도 세팅 (줌 19: 골목길 상세) ---
+        const map = L.map('map', {
+            zoomControl: false, dragging: false, scrollWheelZoom: false, doubleClickZoom: false
+        }).setView([37.532600, 126.631400], 19);
+
+        L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+
+        const mapElement = document.getElementById('map');
+        let currentLat = 37.532600;
+        let currentLng = 126.631400;
+
+        // --- 2. HUD 렌더링 ---
+        const speedTape = document.getElementById('speed-tape');
+        const compassTape = document.getElementById('compass-tape');
+        const pointerText = document.getElementById('pointer-text');
+        const headingDeg = document.getElementById('heading-deg');
+        const headingDir = document.getElementById('heading-dir');
+        const speedValLabel = document.getElementById('speed-val-label');
+
+        for (let i = 0; i <= 160; i += 10) {
+            const tick = document.createElement('div');
+            tick.className = 'speed-tick';
+            tick.innerHTML = `${i} <div class="speed-tick-minor"></div>`;
+            speedTape.appendChild(tick);
+        }
+
+        for(let r=0; r<3; r++) {
+            for(let d=0; d<360; d+=30) {
+                const unit = document.createElement('div');
+                unit.className = 'compass-unit';
+                unit.innerHTML = `
+                    <div class="compass-tick-major"></div>
+                    <div class="compass-tick-minor" style="left: 40px;"></div>
+                    <div class="compass-tick-minor" style="left: 80px;"></div>
+                    <div class="compass-label">${d}°</div>
+                `;
+                compassTape.appendChild(unit);
+            }
+        }
+
+        function getDirectionName(deg) {
+            const dirs =['NORTH', 'NORTHEAST', 'EAST', 'SOUTHEAST', 'SOUTH', 'SOUTHWEST', 'WEST', 'NORTHWEST'];
+            return dirs[Math.round(((deg %= 360) < 0 ? deg + 360 : deg) / 45) % 8];
+        }
+
+        function updateUI(speedKmh, heading) {
+            const speedOffset = (speedKmh / 10) * 65;
+            speedTape.style.transform = `translateY(${speedOffset}px)`;
+
+            if (speedKmh <= 5) {
+                pointerText.innerText = '---';
+                speedValLabel.innerText = '0 KM/H';
+            } else {
+                const roundedSpeed = Math.round(speedKmh);
+                pointerText.innerText = roundedSpeed;
+                speedValLabel.innerText = roundedSpeed + ' KM/H';
+            }
+
+            const roundedHdg = Math.round(heading);
+            headingDeg.innerText = roundedHdg + '°';
+            headingDir.innerText = getDirectionName(roundedHdg);
+
+            const compassOffset = (heading * 4) + 1440;
+            compassTape.style.transform = `translateX(-${compassOffset}px)`;
+
+            mapElement.style.transform = `rotate(${-heading}deg)`;
+        }
+
+        // --- 3. 주행 시뮬레이션 ---
+        let testSpeed = 0;
+        let testHdg = 0;
+
+        setInterval(() => {
+            testSpeed += 0.3;
+            if(testSpeed > 110) testSpeed = 0;
+            testHdg = (testHdg + 0.5) % 360;
+            updateUI(testSpeed, testHdg);
+
+            const speedMs = testSpeed / 3.6;
+            const distance = (speedMs * 0.05) * 1.2;
+
+            const R = 6378137;
+            const radHdg = testHdg * (Math.PI / 180);
+            const dLat = (distance * Math.cos(radHdg) / R) * (180 / Math.PI);
+            const dLng = (distance * Math.sin(radHdg) / (R * Math.cos(currentLat * Math.PI / 180))) * (180 / Math.PI);
+            currentLat += dLat;
+            currentLng += dLng;
+
+            map.setView([currentLat, currentLng], 19, {animate: false});
+        }, 50);
+    </script>
+</body>
+</html>
