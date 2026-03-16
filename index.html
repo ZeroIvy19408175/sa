@@ -4,250 +4,128 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <meta name="apple-mobile-web-app-capable" content="yes">
-    <title>Real-Time HUD Navigation</title>
-    
-    <!-- Leaflet 지도 라이브러리 -->
+    <title>Real-Time HUD (Sensors Re-written)</title>
+
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
     <style>
         :root {
             --sf-font: "SF Pro Display", "SF Pro Text", -apple-system, sans-serif;
-            --tick-spacing: 65px; 
+            --tick-spacing: 65px;
             --neon-blue: #FA734D;
         }
 
         body {
-            margin: 0;
-            background: #000;
-            color: #fff;
-            font-family: var(--sf-font);
-            height: 100vh;
-            overflow: hidden;
-            -webkit-font-smoothing: antialiased;
-            font-variant-numeric: tabular-nums;
-            letter-spacing: -0.02em;
+            margin: 0; background: #000; color: #fff;
+            font-family: var(--sf-font); height: 100vh; overflow: hidden;
+            -webkit-font-smoothing: antialiased; font-variant-numeric: tabular-nums;
         }
 
-        #map-perspective {
-            position: absolute;
-            top: 0; left: 0;
-            width: 100%; height: 100%;
-            perspective: 1200px;
-            z-index: 1;
+        /* --- 1. 권한 요청 및 GPS 대기 화면 --- */
+        #system-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: #000; z-index: 9999; display: flex;
+            flex-direction: column; align-items: center; justify-content: center;
+            text-align: center;
         }
 
-        #map-tilt {
-            position: absolute;
-            width: 100%; height: 100%;
-            transform: rotateX(35deg); 
-            transform-origin: bottom center;
+        #start-btn {
+            padding: 20px 40px; font-size: 24px; font-weight: 800;
+            background: var(--neon-blue); color: #fff; border: none;
+            border-radius: 12px; cursor: pointer; box-shadow: 0 0 15px rgba(250, 115, 77, 0.5);
         }
 
-        #map {
-            position: absolute;
-            top: -70%; left: -100%;
-            width: 300%; height: 300%;
-            transform-origin: center center;
-            filter: invert(100%) hue-rotate(180deg) brightness(1.2) contrast(1.6); 
-            transition: transform 0.2s linear;
-        }
+        #status-msg { margin-top: 20px; color: #aaa; font-size: 14px; font-weight: 600; line-height: 1.5; }
 
+        /* --- 2. 3D 지도 --- */
+        #map-perspective { position: absolute; top: 0; left: 0; width: 100%; height: 100%; perspective: 1200px; z-index: 1; }
+        #map-tilt { position: absolute; width: 100%; height: 100%; transform: rotateX(35deg); transform-origin: bottom center; }
+        /* 맵 모서리 잘림 방지를 위해 정중앙 확대 */
+        #map { position: absolute; top: -100%; left: -100%; width: 300%; height: 300%; transform-origin: center center; filter: invert(100%) hue-rotate(180deg) brightness(1.2) contrast(1.6); transition: transform 0.1s linear; }
         .leaflet-control-container { display: none !important; }
+        #map-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 5; background: linear-gradient(to bottom, transparent 50%, rgba(0,0,0,0.6) 80%, #000 100%); pointer-events: none; }
 
-        #map-overlay {
-            position: absolute;
-            top: 0; left: 0;
-            width: 100%; height: 100%;
-            z-index: 5;
-            background: linear-gradient(to bottom, 
-                transparent 50%, 
-                rgba(0,0,0,0.6) 80%, 
-                #000 100%);
-            pointer-events: none;
-        }
+        /* --- 3. 속도계 --- */
+        #speedometer-wrapper { position: absolute; left: 15px; top: 15%; bottom: 25%; min-height: 250px; max-height: 380px; width: 75px; background: rgba(0, 0, 0, 0.65); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.4); border-radius: 4px; z-index: 10; }
+        #speed-tape-window { position: absolute; top: 0; left: 0; width: 100%; bottom: 28px; overflow: hidden; }
+        #red-limit-line { position: absolute; right: 0; top: 0; width: 5px; height: 100%; background: #ff0000; z-index: 5; box-shadow: -2px 0 8px rgba(255,0,0,0.5); }
+        #speed-tape { position: absolute; width: 100%; bottom: 50%; display: flex; flex-direction: column-reverse; transition: transform 0.2s linear; }
+        .speed-tick { height: var(--tick-spacing); position: relative; display: flex; align-items: center; justify-content: flex-start; padding-left: 10px; font-size: 24px; font-weight: 700; }
+        .speed-tick::after { content: ""; position: absolute; right: 5px; bottom: 0; width: 16px; height: 2px; background: #fff; }
+        .speed-tick-minor { position: absolute; right: 5px; top: 50%; width: 8px; height: 2px; background: rgba(255, 255, 255, 0.7); }
+        #pointer-container { position: absolute; left: -8px; top: 50%; margin-top: -25px; width: 95px; height: 50px; z-index: 20; }
+        #pointer-text { position: absolute; top: 50%; left: 38px; transform: translate(-50%, -50%); font-size: 30px; font-weight: 800; color: #fff; z-index: 25; letter-spacing: -0.05em; }
+        #spd-info-box { position: absolute; bottom: 0; left: 0; width: 100%; height: 28px; background: #000; border-top: 1px solid rgba(255, 255, 255, 0.5); display: flex; justify-content: space-between; align-items: center; padding: 0 6px; box-sizing: border-box; font-size: 11px; font-weight: 900; }
 
-        #speedometer-wrapper {
-            position: absolute;
-            left: 15px; top: 15%; bottom: 25%;
-            min-height: 250px; max-height: 380px; width: 75px; 
-            background: rgba(0, 0, 0, 0.65);
-            backdrop-filter: blur(12px);
-            border: 1px solid rgba(255, 255, 255, 0.4);
-            border-radius: 1px;
-            z-index: 10;
-        }
-
-        #speed-tape-window {
-            position: absolute;
-            top: 0; left: 0; width: 100%; bottom: 28px;
-            overflow: hidden;
-        }
-
-        #red-limit-line {
-            position: absolute;
-            right: 0; top: 0; width: 5px; height: 100%;
-            background: #ff0000; z-index: 5;
-            box-shadow: -2px 0 8px rgba(255,0,0,0.5);
-        }
-
-        #speed-tape {
-            position: absolute;
-            width: 100%; bottom: 50%; 
-            display: flex; flex-direction: column-reverse;
-            transition: transform 0.2s linear;
-        }
-
-        .speed-tick {
-            height: var(--tick-spacing); position: relative;
-            display: flex; align-items: center; justify-content: flex-start;
-            padding-left: 10px; font-size: 24px; font-weight: 700;
-        }
-
-        .speed-tick::after {
-            content: ""; position: absolute; right: 5px; bottom: 0;
-            width: 16px; height: 2px; background: #fff;
-        }
-
-        .speed-tick-minor {
-            position: absolute; right: 5px; top: 50%;
-            width: 8px; height: 2px; background: rgba(255, 255, 255, 0.7);
-        }
-
-        #pointer-container {
-            position: absolute; left: -8px; top: 50%;
-            margin-top: -25px; width: 95px; height: 50px; z-index: 20;
-        }
-
-        #pointer-text {
-            position: absolute; top: 50%; left: 38px; 
-            transform: translate(-50%, -50%);
-            font-size: 30px; font-weight: 800; color: #fff; z-index: 25;
-            letter-spacing: -0.05em;
-        }
-
-        #spd-info-box {
-            position: absolute; bottom: 0; left: 0; width: 100%; height: 28px;
-            background: #000; border-top: 1px solid rgba(255, 255, 255, 0.5);
-            display: flex; justify-content: space-between; align-items: center;
-            padding: 0 6px; box-sizing: border-box; 
-            font-size: 11px; font-weight: 900;
-        }
-
-        #compass-wrapper {
-            position: absolute; bottom: 30px; left: 0; width: 100%;
-            padding: 0 25px; box-sizing: border-box; z-index: 10;
-        }
-
-        #heading-text-group {
-            margin-bottom: 8px; display: flex; align-items: baseline; gap: 10px;
-            text-shadow: 0 0 15px rgba(0,0,0,0.9);
-        }
-
+        /* --- 4. 나침반 --- */
+        #compass-wrapper { position: absolute; bottom: 30px; left: 0; width: 100%; padding: 0 25px; box-sizing: border-box; z-index: 10; }
+        #heading-text-group { margin-bottom: 8px; display: flex; align-items: baseline; gap: 10px; text-shadow: 0 0 15px rgba(0,0,0,0.9); }
         #heading-deg { font-size: 52px; font-weight: 800; color: #fff; letter-spacing: -0.03em; }
         #heading-dir { font-size: 24px; color: var(--neon-blue); font-weight: 700; text-transform: uppercase; }
-
-        #compass-tape-window {
-            position: relative;
-            width: 100%; height: 60px; overflow: hidden;
-            background: rgba(0,0,0,0.6);
-            backdrop-filter: blur(12px);
-            border: 1px solid rgba(255, 255, 255, 0.2);
-            border-radius: 12px;
-            mask-image: linear-gradient(to right, transparent, black 15%, black 85%, transparent);
-            -webkit-mask-image: linear-gradient(to right, transparent, black 15%, black 85%, transparent);
-        }
-
-        #compass-center-mark {
-            position: absolute; left: 50%; margin-left: -1.5px; top: 0;
-            width: 3px; height: 28px; background: var(--neon-blue); z-index: 20;
-            box-shadow: 0 0 12px var(--neon-blue);
-        }
-
-        #compass-tape {
-            position: absolute; top: 0; left: 50%; display: flex;
-            transition: transform 0.2s linear;
-        }
-
+        #compass-tape-window { position: relative; width: 100%; height: 60px; overflow: hidden; background: rgba(0,0,0,0.6); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.2); border-radius: 12px; mask-image: linear-gradient(to right, transparent, black 15%, black 85%, transparent); -webkit-mask-image: linear-gradient(to right, transparent, black 15%, black 85%, transparent); }
+        #compass-center-mark { position: absolute; left: 50%; margin-left: -1.5px; top: 0; width: 3px; height: 28px; background: var(--neon-blue); z-index: 20; box-shadow: 0 0 12px var(--neon-blue); }
+        #compass-tape { position: absolute; top: 0; left: 50%; display: flex; transition: transform 0.1s linear; }
         .compass-unit { flex: 0 0 120px; width: 120px; height: 100%; position: relative; }
-
-        .compass-tick-major {
-            position: absolute; top: 10px; left: 0; width: 2px; height: 16px;
-            background: #fff; transform: translateX(-50%);
-        }
-
-        .compass-tick-minor {
-            position: absolute; top: 10px; width: 2px; height: 9px;
-            background: rgba(255, 255, 255, 0.6); transform: translateX(-50%);
-        }
-
-        .compass-label {
-            position: absolute; top: 32px; left: 0; transform: translateX(-50%); 
-            font-size: 18px; font-weight: 800; color: #fff;
-        }
-
-        #gps-status {
-            position: fixed; top: 10px; right: 10px; font-size: 10px; color: #555; z-index: 100;
-        }
+        .compass-tick-major { position: absolute; top: 10px; left: 0; width: 2px; height: 16px; background: #fff; transform: translateX(-50%); }
+        .compass-tick-minor { position: absolute; top: 10px; width: 2px; height: 9px; background: rgba(255, 255, 255, 0.6); transform: translateX(-50%); }
+        .compass-label { position: absolute; top: 32px; left: 0; transform: translateX(-50%); font-size: 18px; font-weight: 800; color: #fff; }
     </style>
 </head>
 <body>
 
-    <div id="gps-status">GPS WAITING...</div>
-
-    <div id="map-perspective">
-        <div id="map-tilt">
-            <div id="map"></div>
+    <!-- 1. 앱 실행 & GPS 대기 오버레이 -->
+    <div id="system-overlay">
+        <button id="start-btn">SYSTEM START</button>
+        <div id="status-msg">
+            버튼을 눌러 나침반/GPS 권한을 허용해주세요.<br>
+            (HTTPS 보안 연결 필수)
         </div>
     </div>
+
+    <!-- 2. 지도 영역 -->
+    <div id="map-perspective"><div id="map-tilt"><div id="map"></div></div></div>
     <div id="map-overlay"></div>
 
+    <!-- 3. UI 영역 -->
     <div id="speedometer-wrapper">
         <div id="speed-tape-window">
             <div id="red-limit-line"></div>
             <div id="speed-tape"></div>
             <div id="pointer-container">
-                <svg width="95" height="50" viewBox="0 0 95 50">
-                    <path d="M 2 5 L 68 5 L 90 25 L 68 45 L 2 45 Z" fill="#000" stroke="#fff" stroke-width="2.5"/>
-                </svg>
+                <svg width="95" height="50" viewBox="0 0 95 50"><path d="M 2 5 L 68 5 L 90 25 L 68 45 L 2 45 Z" fill="#000" stroke="#fff" stroke-width="2.5"/></svg>
                 <div id="pointer-text">---</div>
             </div>
         </div>
-        <div id="spd-info-box">
-            <span>GS</span>
-            <span id="speed-val-label">0 KM/H</span>
-        </div>
+        <div id="spd-info-box"><span>GS</span><span id="speed-val-label">0 KM/H</span></div>
     </div>
 
     <div id="compass-wrapper">
-        <div id="heading-text-group">
-            <span id="heading-deg">0°</span>
-            <span id="heading-dir">NORTH</span>
-        </div>
-        <div id="compass-tape-window">
-            <div id="compass-center-mark"></div>
-            <div id="compass-tape"></div>
-        </div>
+        <div id="heading-text-group"><span id="heading-deg">0°</span><span id="heading-dir">NORTH</span></div>
+        <div id="compass-tape-window"><div id="compass-center-mark"></div><div id="compass-tape"></div></div>
     </div>
 
     <script>
-        // --- 1. 지도 초기화 (최초 위치는 0,0으로 대기) ---
-        const map = L.map('map', {
-            zoomControl: false, dragging: false, scrollWheelZoom: false, doubleClickZoom: false
-        }).setView([37.5, 127], 19); 
-
-        L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+        // DOM 요소 세팅
+        const overlay = document.getElementById('system-overlay');
+        const startBtn = document.getElementById('start-btn');
+        const statusMsg = document.getElementById('status-msg');
 
         const mapElement = document.getElementById('map');
-        const statusEl = document.getElementById('gps-status');
-
-        // --- 2. HUD 요소 ---
         const speedTape = document.getElementById('speed-tape');
-        const compassTape = document.getElementById('compass-tape');
         const pointerText = document.getElementById('pointer-text');
+        const speedValLabel = document.getElementById('speed-val-label');
+
+        const compassTape = document.getElementById('compass-tape');
         const headingDeg = document.getElementById('heading-deg');
         const headingDir = document.getElementById('heading-dir');
-        const speedValLabel = document.getElementById('speed-val-label');
+
+        // 지도 객체 (초기에는 아무 좌표도 잡지 않고 대기)
+        const map = L.map('map', { zoomControl: false, dragging: false, scrollWheelZoom: false, doubleClickZoom: false });
+        L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+
+        let mapInitialized = false;
+        let isCompassSensorActive = false; // 핸드폰 나침반 센서가 켜졌는지 유무
 
         // 속도계 눈금 생성
         for (let i = 0; i <= 160; i += 10) {
@@ -262,12 +140,7 @@
             for(let d=0; d<360; d+=30) {
                 const unit = document.createElement('div');
                 unit.className = 'compass-unit';
-                unit.innerHTML = `
-                    <div class="compass-tick-major"></div>
-                    <div class="compass-tick-minor" style="left: 40px;"></div>
-                    <div class="compass-tick-minor" style="left: 80px;"></div>
-                    <div class="compass-label">${d}°</div>
-                `;
+                unit.innerHTML = `<div class="compass-tick-major"></div><div class="compass-tick-minor" style="left: 40px;"></div><div class="compass-tick-minor" style="left: 80px;"></div><div class="compass-label">${d}°</div>`;
                 compassTape.appendChild(unit);
             }
         }
@@ -277,17 +150,48 @@
             return dirs[Math.round(((deg %= 360) < 0 ? deg + 360 : deg) / 45) % 8];
         }
 
-        // --- 3. 실시간 위치 데이터 처리 ---
-        let lastHeading = 0;
+        // ==========================================
+        // [로직 1] 나침반 센서 단독 처리
+        // ==========================================
+        function handleOrientation(e) {
+            let heading = null;
+            if (e.webkitCompassHeading) {
+                heading = e.webkitCompassHeading; // 아이폰 나침반
+            } else if (e.absolute && e.alpha !== null) {
+                heading = 360 - e.alpha; // 안드로이드 등
+            }
 
-        function updateUI(pos) {
-            const coords = pos.coords;
-            
-            // [속도 계산] m/s -> km/h
-            const speedKmh = coords.speed && coords.speed > 0 ? coords.speed * 3.6 : 0;
-            const speedOffset = (speedKmh / 10) * 65; 
-            speedTape.style.transform = `translateY(${speedOffset}px)`;
-            
+            if (heading !== null) {
+                isCompassSensorActive = true;
+                const roundedHdg = Math.round(heading);
+
+                headingDeg.innerText = roundedHdg + '°';
+                headingDir.innerText = getDirectionName(roundedHdg);
+                compassTape.style.transform = `translateX(-${(heading * 4) + 1440}px)`;
+                mapElement.style.transform = `rotate(${-heading}deg)`;
+            }
+        }
+
+        // ==========================================
+        // [로직 2] GPS 센서 단독 처리
+        // ==========================================
+        function handleGPS(pos) {
+            // GPS가 한 번이라도 잡히면 검은 대기 화면을 없앰
+            if (!mapInitialized) {
+                overlay.style.display = 'none';
+                mapInitialized = true;
+            }
+
+            const lat = pos.coords.latitude;
+            const lng = pos.coords.longitude;
+
+            // 지도 내 위치로 즉시 갱신 (반포동 아님!)
+            map.setView([lat, lng], 19, {animate: false});
+
+            // 속도 갱신
+            const speedKmh = pos.coords.speed && pos.coords.speed > 0 ? pos.coords.speed * 3.6 : 0;
+            speedTape.style.transform = `translateY(${(speedKmh / 10) * 65}px)`;
+
             if (speedKmh <= 5) {
                 pointerText.innerText = '---';
                 speedValLabel.innerText = '0 KM/H';
@@ -297,41 +201,59 @@
                 speedValLabel.innerText = roundedSpeed + ' KM/H';
             }
 
-            // [방향 계산] 기기가 정지해 있으면 heading이 null일 수 있음
-            const heading = coords.heading !== null && !isNaN(coords.heading) ? coords.heading : lastHeading;
-            lastHeading = heading;
-
-            const roundedHdg = Math.round(heading);
-            headingDeg.innerText = roundedHdg + '°';
-            headingDir.innerText = getDirectionName(roundedHdg);
-
-            const compassOffset = (heading * 4) + 1440; 
-            compassTape.style.transform = `translateX(-${compassOffset}px)`;
-
-            // [지도 업데이트]
-            map.setView([coords.latitude, coords.longitude], 19, {animate: false});
-            mapElement.style.transform = `rotate(${-heading}deg)`;
-            
-            statusEl.innerText = "GPS ACTIVE";
+            // 만약 자기장 나침반 센서가 고장/차단 났다면, GPS 이동 방향으로라도 나침반을 돌림 (최후의 보루)
+            if (!isCompassSensorActive && pos.coords.heading !== null && !isNaN(pos.coords.heading)) {
+                const h = pos.coords.heading;
+                headingDeg.innerText = Math.round(h) + '°';
+                headingDir.innerText = getDirectionName(Math.round(h));
+                compassTape.style.transform = `translateX(-${(h * 4) + 1440}px)`;
+                mapElement.style.transform = `rotate(${-h}deg)`;
+            }
         }
 
-        // --- 4. 실제 GPS 시작 ---
-        if ("geolocation" in navigator) {
-            navigator.geolocation.watchPosition(updateUI, (err) => {
-                statusEl.innerText = "GPS ERROR: " + err.message;
-            }, {
-                enableHighAccuracy: true, // 높은 정확도 (GPS 센서 강제 사용)
-                maximumAge: 0,            // 캐시된 위치 사용 안함
-                timeout: 10000            // 10초 내 응답 없으면 타임아웃
-            });
-        } else {
-            statusEl.innerText = "GPS NOT SUPPORTED";
+        function handleGPSError(err) {
+            statusMsg.innerHTML = `⚠️ GPS 오류 발생<br><br>${err.message}<br><br>아이폰 설정에서 위치 권한을 확인하거나,<br>반드시 HTTPS (GitHub 등) 주소로 접속하세요.`;
+            statusMsg.style.color = "#ff4444";
         }
 
-        // 화면 꺼짐 방지
-        if ('wakeLock' in navigator) {
-            navigator.wakeLock.request('screen').catch(()=>{});
-        }
+        // ==========================================
+        // [로직 3] 시작 버튼: 모든 센서 강제 활성화
+        // ==========================================
+        startBtn.addEventListener('click', async () => {
+            startBtn.style.display = 'none';
+            statusMsg.innerHTML = "🛰️ 위성 연결 및 센서 동기화 중...<br>밖으로 이동해주세요.";
+
+            // 1. 아이폰 나침반 권한 요청 (iOS 13+ 필수)
+            if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+                try {
+                    const permission = await DeviceOrientationEvent.requestPermission();
+                    if (permission === 'granted') {
+                        window.addEventListener('deviceorientation', handleOrientation, true);
+                    } else {
+                        statusMsg.innerHTML += "<br><br>⚠️ 나침반 권한이 거부되었습니다.";
+                    }
+                } catch (error) {
+                    statusMsg.innerHTML = `⚠️ 센서 권한 오류: HTTPS 환경이 아닙니다.<br>로컬 IP에서는 작동하지 않습니다.`;
+                    statusMsg.style.color = "#ff4444";
+                    return; // HTTPS가 아니면 여기서 멈춤
+                }
+            } else {
+                window.addEventListener('deviceorientation', handleOrientation, true);
+            }
+
+            // 2. GPS 권한 요청 및 추적 시작
+            if ("geolocation" in navigator) {
+                navigator.geolocation.watchPosition(handleGPS, handleGPSError, {
+                    enableHighAccuracy: true,
+                    maximumAge: 0,
+                    timeout: 10000
+                });
+            } else {
+                handleGPSError({message: "이 기기는 GPS를 지원하지 않습니다."});
+            }
+
+            if ('wakeLock' in navigator) navigator.wakeLock.request('screen');
+        });
     </script>
 </body>
 </html>
